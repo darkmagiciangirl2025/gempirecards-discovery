@@ -1,68 +1,29 @@
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
+    const path = url.pathname;
 
-    // ---- CORS (adjust allowed origins as needed) ----
-    const allowedOrigins = new Set([
-      "https://gempirecards.com",
-      "https://www.gempirecards.com",
-      // add your Cardd domain if you want:
-      // "https://YOUR-SITE.carrd.co",
-    ]);
-
-    const origin = request.headers.get("Origin") || "";
-    const corsHeaders = {
-      "Access-Control-Allow-Methods": "GET,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type,Authorization",
-    };
-
-    // If request has an Origin and it's allowed, echo it back.
-    // Otherwise, no CORS (keeps it safer).
-    if (origin && allowedOrigins.has(origin)) {
-      corsHeaders["Access-Control-Allow-Origin"] = origin;
-      corsHeaders["Vary"] = "Origin";
+    // ========= ROOT =========
+    if (path === "/") {
+      return new Response("Gempire Discovery API is live", { status: 200 });
     }
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders });
-    }
-
-    // ---- Health check ----
-    if (url.pathname === "/") {
-      return new Response("Gempire Discovery API is live", {
-        status: 200,
-        headers: { ...corsHeaders, "Content-Type": "text/plain" },
-      });
-    }
-
-    // ---- Search endpoint ----
-    // Example: /search?q=pokemon&limit=24
-    if (url.pathname === "/search") {
-      const q = (url.searchParams.get("q") || "").trim();
-      const limit = Math.min(parseInt(url.searchParams.get("limit") || "24", 10), 50);
-
-      if (!q) {
-        return new Response(JSON.stringify({ error: "Missing q" }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+    // ========= SEARCH =========
+    // /search?q=pokemon
+    if (path === "/search") {
+      const query = url.searchParams.get("q");
+      if (!query) {
+        return new Response(
+          JSON.stringify({ error: "Missing search query" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
       }
 
-      // ---- Cache key (varies by q + limit) ----
-      const cacheTtlSeconds = 60;
-      const cacheKey = new Request(
-        `${url.origin}/__cache/search?q=${encodeURIComponent(q)}&limit=${limit}`,
-        request
+      const ebayUrl = new URL(
+        "https://api.ebay.com/buy/browse/v1/item_summary/search"
       );
-
-      const cache = caches.default;
-      const cached = await cache.match(cacheKey);
-      if (cached) return cached;
-
-      // ---- Call eBay Browse Search API ----
-      const ebayUrl = new URL("https://api.ebay.com/buy/browse/v1/item_summary/search");
-      ebayUrl.searchParams.set("q", q);
-      ebayUrl.searchParams.set("limit", String(limit));
+      ebayUrl.searchParams.set("q", query);
+      ebayUrl.searchParams.set("limit", "24");
 
       const ebayRes = await fetch(ebayUrl.toString(), {
         headers: {
@@ -72,98 +33,68 @@ export default {
       });
 
       if (!ebayRes.ok) {
-        const text = await ebayRes.text().catch(() => "");
         return new Response(
-          JSON.stringify({
-            error: "eBay API error",
-            status: ebayRes.status,
-            details: text.slice(0, 500),
-          }),
-          {
-            status: 502,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
+          JSON.stringify({ error: "eBay API error" }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
         );
       }
 
       const data = await ebayRes.json();
 
-      // ---- EPN tracking settings ----
       const CAMPID = "5339113253";
       const UL_REF =
         "https://rover.ebay.com/rover/1/711-53200-19255-0/1";
 
-      // Helper: build your affiliate link (keeps original item URL + adds tracking)
-      function buildAffiliateLink(itemWebUrl) {
-        if (!itemWebUrl) return null;
-
-        const base = new URL(itemWebUrl);
-
-        // Ensure EPN params exist
-        base.searchParams.set("mkcid", "1");
-        base.searchParams.set("mkrid", "711-53200-19255-0");
-        base.searchParams.set("siteid", "0");
-        base.searchParams.set("campid", CAMPID);
-        base.searchParams.set("customid", "");
-        base.searchParams.set("toolid", "10001");
-        base.searchParams.set("mkevt", "1");
-
-        // Your app-helper parameter
-        base.searchParams.set("ul_ref", UL_REF);
-
-        return base.toString();
-      }
-
-      // ---- Clean response shape ----
       const items = (data.itemSummaries || []).map((item) => {
-        const priceVal = item?.price?.value ?? null;
-        const currency = item?.price?.currency ?? null;
+        let link = item.itemWebUrl;
 
-        // pick a decent image
-        const image =
-          item?.image?.imageUrl ||
-          item?.thumbnailImages?.[0]?.imageUrl ||
-          null;
-
-        const itemWebUrl = item?.itemWebUrl || null;
+        if (link) {
+          link +=
+            (link.includes("?") ? "&" : "?") +
+            `mkcid=1&mkrid=711-53200-19255-0&campid=${CAMPID}&toolid=10001` +
+            `&customid=` +
+            `&ul_ref=${encodeURIComponent(UL_REF)}`;
+        }
 
         return {
-          id: item?.itemId || null,
-          title: item?.title || null,
-          price: priceVal ? String(priceVal) : null,
-          currency,
-          image,
-          condition: item?.condition || null,
-          seller: item?.seller?.username || null,
-          link: itemWebUrl ? buildAffiliateLink(itemWebUrl) : null,
+          id: item.itemId,
+          title: item.title,
+          price: item.price?.value,
+          currency: item.price?.currency,
+          image: item.image?.imageUrl,
+          condition: item.condition,
+          seller: item.seller?.username,
+          link,
         };
       });
 
-      const body = JSON.stringify({
-        q,
-        limit,
-        count: items.length,
-        items,
+      return new Response(JSON.stringify({ items }), {
+        headers: { "Content-Type": "application/json" },
       });
-
-      const response = new Response(body, {
-        status: 200,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-          "Cache-Control": `public, max-age=${cacheTtlSeconds}`,
-        },
-      });
-
-      // Save to edge cache
-      ctx.waitUntil(cache.put(cacheKey, response.clone()));
-
-      return response;
     }
 
-    return new Response("Not found", {
-      status: 404,
-      headers: { ...corsHeaders, "Content-Type": "text/plain" },
-    });
+    // ========= GO REDIRECT =========
+    // /go/ITEM_ID
+    if (path.startsWith("/go/")) {
+      const itemId = path.split("/go/")[1];
+      if (!itemId) {
+        return new Response("Missing item ID", { status: 400 });
+      }
+
+      const CAMPID = "5339113253";
+      const UL_REF =
+        "https://rover.ebay.com/rover/1/711-53200-19255-0/1";
+
+      const redirectUrl =
+        `https://www.ebay.com/itm/${itemId}` +
+        `?mkcid=1&mkrid=711-53200-19255-0` +
+        `&campid=${CAMPID}&toolid=10001` +
+        `&customid=` +
+        `&ul_ref=${encodeURIComponent(UL_REF)}`;
+
+      return Response.redirect(redirectUrl, 302);
+    }
+
+    return new Response("Not found", { status: 404 });
   },
 };
