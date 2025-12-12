@@ -1,0 +1,6 @@
+name = "gempirecards-discovery"
+main = "src/index.js"
+compatibility_date = "2025-12-12"
+
+[vars]
+# EBAY_TOKEN will be added in Cloudflare dashboard (not here)
