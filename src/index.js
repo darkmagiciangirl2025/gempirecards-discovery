@@ -2,40 +2,40 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // -------------------------
-    // Health check
-    // -------------------------
+    // -----------------------------
+    // ROOT: Health check
+    // -----------------------------
     if (url.pathname === "/") {
       return new Response(
-        JSON.stringify({
-          status: "ok",
-          service: "Gempire Discovery API",
-        }),
-        { headers: { "Content-Type": "application/json" } }
+        "Gempire Discovery API is live 🚀",
+        { status: 200 }
       );
     }
 
-    // -------------------------
+    // -----------------------------
     // /search?q=pokemon
-    // -------------------------
+    // -----------------------------
     if (url.pathname === "/search") {
       const query = url.searchParams.get("q");
+
       if (!query) {
         return new Response(
-          JSON.stringify({ error: "Missing ?q=" }),
+          JSON.stringify({ error: "Missing search query (?q=)" }),
           { status: 400, headers: { "Content-Type": "application/json" } }
         );
       }
 
+      // eBay Browse API
       const ebayURL = new URL(
         "https://api.ebay.com/buy/browse/v1/item_summary/search"
       );
       ebayURL.searchParams.set("q", query);
       ebayURL.searchParams.set("limit", "24");
+      ebayURL.searchParams.set("sort", "newlyListed");
 
       const ebayRes = await fetch(ebayURL.toString(), {
         headers: {
-          Authorization: `Bearer ${env.EBAY_TOKEN}`,
+          "Authorization": `Bearer ${env.EBAY_TOKEN}`,
           "Content-Type": "application/json",
         },
       });
@@ -49,43 +49,48 @@ export default {
 
       const data = await ebayRes.json();
 
-      // -------------------------
-      // EPN constants
-      // -------------------------
+      // -----------------------------
+      // Affiliate settings
+      // -----------------------------
       const CAMPID = "5339113253";
-      const MKRID = "711-53200-19255-0";
-      const TOOLID = "10001";
       const UL_REF =
         "https://rover.ebay.com/rover/1/711-53200-19255-0/1";
 
-      const items = (data.itemSummaries || []).map((item) => {
-        let link = item.itemWebUrl || "";
+      // -----------------------------
+      // Normalize results
+      // -----------------------------
+      const items = (data.itemSummaries || []).map(item => {
+        let link = item.itemWebUrl;
 
         if (link) {
           link +=
             (link.includes("?") ? "&" : "?") +
-            `mkcid=1&mkrid=${MKRID}&campid=${CAMPID}&toolid=${TOOLID}&ul_ref=${encodeURIComponent(
-              UL_REF
-            )}`;
+            `mkcid=1&mkrid=711-53200-19255-0&siteid=0` +
+            `&campid=${CAMPID}&customid=&toolid=10001&mkevt=1` +
+            `&ul_ref=${encodeURIComponent(UL_REF)}`;
         }
 
         return {
           id: item.itemId,
           title: item.title,
-          price: item.price?.value || null,
-          currency: item.price?.currency || null,
-          image: item.image?.imageUrl || null,
-          condition: item.condition || null,
+          price: item.price?.value,
+          currency: item.price?.currency,
+          image: item.image?.imageUrl,
+          condition: item.condition,
+          seller: item.seller?.username,
           link,
         };
       });
 
       return new Response(
-        JSON.stringify({ results: items }),
-        { headers: { "Content-Type": "application/json" } }
+        JSON.stringify({ items }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
       );
     }
 
+    // -----------------------------
+    // Fallback
+    // -----------------------------
     return new Response("Not found", { status: 404 });
-  },
+  }
 };
